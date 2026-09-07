@@ -1,0 +1,239 @@
+# =====================================================================
+#  共享物理/数据管线配置。
+#  最终七靶标模型的目标、求解器和验收设置只由
+#  new_model_experiment/final_*_protocol.toml 冻结；本文件不定义其优化模型。
+# =====================================================================
+
+[run]
+systems   = ["RBTS", "RTS79"]                # 要跑的系统；RTS_GMLC 等算法稳定后再启用
+models    = ["M0", "M1", "M2", "M3", "M4", "M5", "M6"]  # 历史比较标签；最终模型运行器不读取此列表
+mode      = "fixed"                          # 历史驱动兼容字段；最终模型由 new_model_experiment/ 的显式运行器启动
+seed      = 20260615                         # 全局随机种子 (StableRNG)
+cache     = true                             # 命中 data_cache 则跳过数据管线
+results_dir = "results"
+cache_dir   = "data_cache"
+max_audit_snapshots = 240                    # 测试快照下采样上限(逐快照求解,控制运行时长)
+
+[run.audit_caps]                             # 按系统覆盖快照上限(大系统求解慢,取更少)
+RBTS     = 120
+RTS79    = 60
+RTS_GMLC = 24
+
+# ---------------------------------------------------------------------
+# 模块 1: 数据管线 (清洗 / 对齐 / 误差样本 / 划分 / 压缩)
+# ---------------------------------------------------------------------
+[data]
+resolution_hours = 1            # 调度快照分辨率 = 逐小时
+# 时间顺序划分 (单位: 天)。验证集仅用于选参，测试集仅用于审计。
+split_train_days = 120
+split_val_days   = 30
+split_test_days  = 72
+
+[data.scenario]                 # 低风高负荷应力工况筛选(外生:按预测净负荷分位; 无泄露)
+screen           = true         # 是否启用应力筛选
+netload_top_frac = 0.40         # 保留预测净负荷(1ᵀl^f-1ᵀw^f)最高的前 40% 小时
+screen_order     = "split_then_screen" # 先按完整时间轴划分，再筛选各时间段
+threshold_scope  = "train"      # 应力阈值仅由训练期预测值估计
+
+[data.forecast]                 # RBTS/RTS79 无原生预测 -> 合成 AR(1) 误差
+method   = "ar1"                # "ar1" | "smoothing" | "external"
+load_sigma_frac = 0.05          # 负荷预测误差标准差 (占该母线负荷的比例)
+wind_sigma_frac = 0.20          # 风电预测误差标准差 (占该风场容量的比例)
+load_phi = 0.7                  # 负荷误差 AR(1) 系数
+wind_phi = 0.5                  # 风电误差 AR(1) 系数
+# RTS_GMLC 用现成 DA/RT, 忽略上面的合成参数 (method 对 GMLC 强制 = "native")
+
+[data.compress]                 # 尾部保留的带权 k-means 场景压缩
+K            = 20               # 代表样本数 (主实验)
+n_tail       = 6               # 其中尾部代表样本数 -> k-means 中心 = K - n_tail
+tail_criteria = ["absOmega", "positiveOmega", "negativeOmega", "forecastNetLoad",
+                 "availableWind", "forecastLineLoading", "reserveResponseStress"]
+weighted     = true            # 非均匀样本权重 p_hat (false=等权 1/N)
+
+# ---------------------------------------------------------------------
+# 模块 2/3: 网络与模型口径
+# ---------------------------------------------------------------------
+[network]
+# 风场 -> 母线映射 (xlsx 文件名未含母线，需在此指定)。GMLC 由数据自带。
+# 容量来自 xlsx 文件名 (Nominal capacity)。
+[network.wind_bus.RBTS]
+"site5" = 3                     # RBTS 36MW 风场接入母线 3 (示例，可改)
+[network.wind_bus.RTS79]
+"site1" = 8
+"site2" = 15
+"site3" = 16
+"site4" = 19
+"site5" = 21
+"site6" = 23
+
+[network.agc]
+mode = "by_pmax"               # AGC 方向 beta_bar: "by_pmax"(按 Pmax 归一) | "uniform"
+# 参与集默认 = 全部在线机组; 可按需在适配器里收窄
+
+[reserve]
+# (当前未使用) 历史"确定性预算"参考; 备用上限由 [model] 的 ru_cap_frac/rd_cap_frac
+# (默认 Inf=无约束) 控制, 备用稀缺扫描经 run_reserve.jl 注入。保留仅作记录。
+ru_budget_frac = 0.10
+rd_budget_frac = 0.10
+
+# ---------------------------------------------------------------------
+# 模块 3: 主模型超参 (KDE-phi-HMCR-DRCC-RS)
+# ---------------------------------------------------------------------
+[model]
+p          = 2                 # HMCR 阶数 (2 -> 旋转二阶锥)
+gamma_m    = 0.95             # 安全侧 HMCR 置信 (gamma_bar = 1 - eps)
+eps_m      = 0.05             # 机会约束违约上限
+target_rs_mode = "legacy"     # "legacy" 原结果复现 | "common_dimensionless" 七目标共同正带宽/无量纲候选
+target_gamma = 0.95            # common_dimensionless: 成本与六安全目标共用 gamma=1-eps_m
+target_tau_rule = "signed_relative" # common_dimensionless: tau_a=Z_a+rho_tau*|Z_a|
+target_cost_scale_rule = "forecast_full_shed" # S_c=sum_d c_shed,d*l_d^f
+target_cost_scale_floor = 1.0  # 与单时段切负荷成本同量纲的正地板
+target_k_rule = "reference_target_ratio_no_eps" # k_m=|Z0m|/|Z0c|；不使用 epsilon_c 或其他地板
+target_kde_h_min_rel = 1e-6    # 七目标归一坐标下的严格正带宽地板
+target_bandwidth_pilot = "common_anchor" # 七个带宽使用同一个事前参考决策
+target_kde_multiplier = 1.0    # 共同 raw-N Silverman 倍率
+target_expected_cost_tiebreak = 0.0 # common_dimensionless 候选；冻结前单独做平局规则敏感性
+target_lexicographic_tiebreak = false # common_dimensionless 候选：先最小脆弱性，再最小期望切负荷
+target_lexicographic_abs_tol = 1e-7
+target_lexicographic_rel_tol = 0.0
+target_lexicographic_gap_multiplier = 10.0
+target_lexicographic_activation_tol = 1e-2 # 仅在近零脆弱性平台启动第二阶段
+target_reference_retry_refined = true # 同一参考问题遇数值终止时用 QDLDL 精化重试，不换状态/样本/模型
+target_reference_retry_direct_solve_method = "qdldl"
+target_reference_retry_equilibrate_max_iter = 20
+target_reference_retry_iterative_refinement_max_iter = 20
+gamma_c    = 0.0             # 成本侧 HMCR 置信 (原模型定理1); γc=0 退化为期望-RS。γc 敏感性见 run_gamma_c.jl
+cost_kde_mode = "off"         # 成本侧 KDE 带宽: "off"(样本 HMCR, h_c=0) | "fixed"(用 kde_h_c) | "rule"
+rho_tau    = 0.25            # 历史驱动回退值；正式 M6 必须读取 validation 分批冻结的 rho_tau
+omega_d    = 1.0             # 修改后 M6 目标函数 min κc + ωd κd 的安全脆弱性偏好参数
+eps_c      = 1000.0          # 仅 legacy k_m 公式的退化保护；common 规则不读取该值
+rho_cost   = 3.0             # 兼容旧脚本的历史别名; 主模型/驱动优先读取 rho_tau
+z0_method  = "milp"          # 仅供旧 calibrate_Z0 单成本诊断；当前 M6 使用 calibrate_targets 七目标轮换
+                             # "milp"(经验机会约束 Big-M) | "cvar" | "drcc"，均不替代当前七目标定义
+theta_m    = 0.05             # 历史驱动回退值；正式 M3 使用 validation 分批冻结的 theta_m
+phi_type   = "chi2"          # phi 散度: "chi2"(含正部截断的精确闭包透视/SOC) | "KL"(指数锥)
+kde_mode   = "rule"          # 历史复现默认；正式 KDE 模型显式传入训练集估计并冻结的带宽 profile
+                             #   | "fixed"(固定 kde_h_m) | "off"(无平滑, 退化样本 HMCR/CVaR)
+kde_h_m    = 0.0             # "fixed" 模式下的固定带宽 (rule/off 模式忽略)
+kde_h_c    = 0.0             # (成本侧已为期望 RS, 不用 KDE)
+kde_rule_scale_m = 1.0       # 安全侧加权 Silverman 带宽倍率; 1.0 为标准规则
+kde_rule_scale_c = 1.0       # 成本侧加权 Silverman 带宽倍率; cost_kde_mode="rule" 时生效
+kde_quad_rule = "legacy_grid" # 历史结果复现口径；正式验证/主实验显式覆盖为 gauss_hermite
+kde_quad_nodes = 5           # 历史结果复现口径；正式 KDE 结果使用稳定化 Q45
+eps_y      = 1e-9           # 透视变量数值下界 (太大会在 τ≈0 时造成伪不可行)
+voll       = 1000.0          # 切负荷价值 VOLL ($/MWh), 切负荷成本 c_shed
+audit_tol_mw = 1e-3          # 所有模型共用的 EDNS/LOLP/切负荷边界审计死区 (1 kW)
+eps_gen_tiebreak = 1e-6      # 发电成本字典序平局项权重: 主目标只最小化(期望)切负荷成本,
+                            # 该项仅在切负荷最优解集中挑"经济调度"运行点钉住 g。1e-6≪VOLL=1000,
+                            # 切负荷以 ~10^6:1 碾压, 发电成本不可能影响切负荷决策, 是纯平局项。
+                            # 全公开模型 (M0--M6) 同口径施加, 保证调度钉法公平。
+solver_accept_scaled_residual = 1e-5  # Clarabel 缩放后 primal/dual residual 门槛
+solver_accept_physical_abs = 1e-5     # 公共物理检查的统一绝对数值地板 (MW 或响应系数)
+solver_accept_physical_violation = 1e-6 # 扣除绝对地板后的无量纲最大违反门槛
+solver_accept_gap_abs = 5e-5         # 近零目标使用绝对间隙门槛
+solver_accept_gap_rel = 1e-5         # 非零尺度目标使用相对间隙门槛；二者满足其一
+solver_retry_refined = true          # M6 未通过统一门槛时，以同一标定和同一模型执行 QDLDL 精化重试
+solver_retry_models = ["M6", "M5"] # 仅对已观察到可恢复数值终止的模型启用；不重试真实不可行的 M4
+solver_retry_equilibrate_max_iter = 20
+solver_retry_iterative_refinement_max_iter = 20
+
+# ---------------------------------------------------------------------
+# 模块 4: 基线
+# ---------------------------------------------------------------------
+[baseline]
+enable_M5  = false           # legacy switch; current dispatch uses explicit public labels
+M5_type    = "moment"        # legacy metadata only; public M5 is Moment-DRCC
+# M4 = Wasserstein-CVaR-DRCC-OLS 参数 (在 run.models 里加 "M4" 即启用)
+wasserstein_radius = 0.1     # ρ_W; =0 退化为经验 SP/SAA-CVaR(M1 文献口径)
+wasserstein_radius_mode = "absolute" # 历史结果复现; 正式选参用 compression_multiple
+wasserstein_radius_multiplier = 1.0 # compression_multiple: 倍数×实际聚类耦合L1上界；倍率>=1保证原经验分布入球
+eps_curtail        = 1e-3    # 弃风微弱惩罚 ε_c
+support_margin     = 0.25    # 误差盒型支撑 Ξ 在样本 min/max 外扩比例
+wasserstein_support_source = "raw_training" # 支撑上下界由压缩前训练误差估计
+m4_event_set = "deficit_side_up_reserve_and_bidirectional_lines" # W-DRO-SP-OLS 原生 M_def
+moment_eps          = 0.05    # M5 Moment-DRCC 的机会约束违约水平；默认与 eps_m 一致
+moment_cov_scale    = 1.0     # M5 Moment-DRCC 协方差缩放
+moment_source       = "raw_training" # 均值/协方差使用压缩前训练误差，保留簇内方差
+
+# ---------------------------------------------------------------------
+# 灵敏度 / 消融 (模块 6 编排; 主跑时留空)
+# ---------------------------------------------------------------------
+[sensitivity]
+K        = [10, 20, 50]
+rho_tau  = [0.0, 0.25, 0.50, 1.0]
+omega_d  = [0.2, 0.5, 1.0, 2.0, 5.0]
+rho_cost = [0.05, 0.10, 0.20] # 历史成本 RS 扫描, 保留供旧脚本对照
+theta_m  = [0.0, 0.02, 0.05, 0.10]
+run_full_samples = true       # 小系统加 Full 对照
+
+# ---------------------------------------------------------------------
+# 正式选参协议: 仅读 validation，冻结后才能读 test / NSMC
+# ---------------------------------------------------------------------
+[validation]
+systems = ["RBTS", "RTS79"]
+fscales = [1.0, 0.35, 0.20]
+snapshots_per_fscale_system = 2 # 每系统每压力级固定分层验证快照数
+risk_limit = 0.05              # 只作零事件压力目标；若无候选达到则统一回退到最低事件比例并显式标记
+cost_tie_relative = 0.01       # 成本相差 1% 内再以风险和预先锚点破平局；求解时间不参与选参
+require_zero_solver_failures = true
+
+# KDE/HMCR 统计与数值设置: b_h=1 是 Silverman 主设置，其他仅稳定性灵敏度
+kde_bandwidth_multipliers = [0.50, 0.75, 1.00, 1.25, 1.50]
+kde_primary_multiplier = 1.00
+kde_quadrature_orders = [35, 45]
+kde_quadrature_weight_floor = 1e-8
+hmcr_orders = [1, 2]           # p=2 是主模型，p=1 只是 HMCR 消融
+hmcr_primary_order = 2
+kde_stability_rho_tau = 0.0    # 带宽稳定性专用严格控制，避免宽松目标的零脆弱性退化
+kde_stability_omega_d = 1.0
+
+# 每个模型专属参数用同一验证批次和同一选择准则
+m3_theta = [0.005, 0.01, 0.02, 0.05, 0.10] # N=1889,K=20 时 Pearson 渐近参考约 0.016
+m3_tie_anchor = 0.02            # 1% 成本等价且压力事件相同时，回到理论量级锚点
+m4_wasserstein_compression_multipliers = [1.00, 1.25, 1.50, 2.00, 3.00] # 基于合法聚类耦合上界；不小于1保证原经验分布落入压缩中心球
+m4_tie_anchor = 1.00
+m4_support_margin_grid = [0.0, 0.05, 0.10, 0.25] # 只按 validation 支撑覆盖率选最小值
+m6_rho_tau = [0.0, 0.10, 0.25, 0.50, 1.00]
+m6_omega_d = [0.20, 0.50, 1.00, 2.00, 5.00]
+m6_rho_tie_anchor = 0.25        # 性能等价时优先保留原预设，不用求解时间选参
+m6_omega_tie_anchor = 1.00
+m6_selection_order = ["rho_tau", "omega_d"] # 顺序选参，不做 25 组事后挑选
+
+[rolling]
+window_days   = 60
+recluster_every_days = 7      # 7 天重聚类一次; 1 = 每日
+test_days     = 30
+
+[monte_carlo]
+seed      = 20260623          # 非时序MC运行状态抽样种子
+n_samples = 60                # 默认抽样状态数；主文版本可放大
+replace   = true              # true=从测试状态池有放回独立抽样
+warmup_precheck = true        # 正式计时前运行一次不计时 DC 预筛查，消除首次编译开销
+
+[monte_carlo.n_samples_by_system]
+RBTS  = 60
+RTS79 = 30
+
+# 历史元件停运设置保留给共享状态生成/基线追溯。最终模型的元件状态
+# 重放由 run_final_component_state_replay.jl 在模型结果未知前冻结抽样表。
+[monte_carlo.generator_outages]
+enabled = true
+profile = "standard"
+seed_offset = 7919
+failure_policy = "conservative_full_shed" # 求解失败不删分母，按全切负荷保守记账
+sample_lines = true                       # 线路停运按状态重建 PTDF；断网/不可构造状态过滤后不用
+line_unavailability = 0.05                # RBTS 未给定线路 FOR 时的统一压力抽样概率
+line_seed_offset = 15485863
+line_candidate_factor = 4                 # 为过滤极端断网状态预留候选池
+
+# ---------------------------------------------------------------------
+# 模块 5: 输出
+# ---------------------------------------------------------------------
+[reliability]
+annual_hours = 8760.0          # NSMC reliability EENS = annual_hours * EDNS
+
+[output]
+lolp_threshold = 0.05         # 阈值型 LOLP
+write_tables   = true
+write_figures  = true
+audit_full_test = true        # 审计一律用全测试样本
