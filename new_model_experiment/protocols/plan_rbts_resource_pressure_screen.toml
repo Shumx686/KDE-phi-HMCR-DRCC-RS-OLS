@@ -1,0 +1,122 @@
+# Validation-only stage-0 resource-pressure screen from the revised TPS plan.
+# The screen changes scenario data and physical capacities only; it does not
+# change any Proposed-RS or baseline equation. Test states remain forbidden.
+
+[case]
+system = "RBTS"
+pipeline_cache_dir = "data_cache"
+K = 20
+line_limit_scale = 1.00
+
+[model]
+p = 2
+gamma_c = 0.95
+gamma_m = 0.95
+phi = "pearson_chi2"
+quadrature_order = 45
+eps_y = 1.0e-9
+# Predeclared stage-0 anchors only. The selected pressure is followed by the
+# complete 5x5 rho grid and six-scale omega calibration before any test replay.
+rho_tau_c = 0.50
+rho_tau_s = 0.50
+bandwidth_multiplier = 1.0
+cost_bandwidth_floor_mw = 1.0e-6
+safety_bandwidth_floor = 1.0e-6
+# Validation amendment v2: omega=100 forced preventive shedding in every one
+# of the eight pilot states.  The lowest predeclared calibration scale is used
+# here so resource pressure is not selected through an over-conservative RS
+# anchor; the complete six-scale sweep still follows after resource locking.
+omega = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+# Exact two-stage tie-break: preserve the seven-fragility optimum, then use
+# the same nonnegative MW shedding/curtailment convention as the baselines.
+lexicographic_secondary_shed = true
+lexicographic_abs_tol = 5.0e-5
+lexicographic_rel_tol = 0.0
+lexicographic_gap_multiplier = 10.0
+lexicographic_activation_tol = 1.0e-4
+eps_curtail = 1.0e-3
+eps_gen_tiebreak = 1.0e-6
+voll = 1000.0
+
+[solver]
+max_iter = 3000
+direct_solve_method = "qdldl"
+equilibrate_max_iter = 20
+iterative_refinement_max_iter = 20
+dynamic_regularization_delta = 1.0e-8
+min_terminate_step_length = 1.0e-12
+
+[final_solver]
+static_regularization_constant = 1.0e-4
+
+[acceptance]
+accepted_statuses = ["OPTIMAL", "ALMOST_OPTIMAL"]
+residual = 1.0e-5
+gap_abs = 5.0e-5
+gap_rel = 1.0e-5
+reference_nonpositive_tolerance = 0.0
+
+[resource_pressure_screen]
+amendment_id = "RBTS_FORECAST_ADEQUATE_RESOURCE_PRESSURE_V4_BRACKET_20260828"
+validation_amendment_reason = "Validation-only V3 probes showed that target Rnet 10% saturated the LOLP of all risk-aware models and target Rnet 15% still saturated M4. V4 adds the pre-test 17.5%, 20%, and 25% upper bracketing points while preserving the wind-error setting, physical model equations, common validation states, and test prohibition."
+validation_only = true
+test_access = "forbidden_until_resource_and_parameter_locks"
+wind_penetrations = [0.30, 0.40, 0.50, 0.60]
+lambda_eps_grid = [1.00, 1.25, 1.50, 2.00]
+replacement_ratios = [1.00]
+target_rnet_grid = [0.25, 0.20, 0.175, 0.15, 0.10, 0.05, 0.00]
+rnet_reference_statistic = "validation_median"
+pilot_state_count = 8
+confirmation_state_count = 60
+shortlist_count = 12
+models = ["M0", "M2", "M4", "Proposed-RS"]
+# R_net is frozen at the validation median, so this is a majority-adequacy
+# screen rather than a claim that every stress hour is forecast-feasible.
+minimum_forecast_adequacy_rate = 0.60
+pilot_minimum_acceptance_rate = 0.90
+confirmation_minimum_acceptance_rate = 0.95
+m0_lolp_min = 0.30
+m0_lolp_max = 0.80
+m0_lolp_preferred_min = 0.40
+m0_lolp_preferred_max = 0.70
+m0_lolp_target = 0.55
+strong_baseline_conditional_shed_multiplier_max = 12.0
+risk_model_saturation_lolp = 0.95
+maximum_saturated_risk_models = 1
+# RBTS uses M4 as the deliberately heavy all-event comparator.  It may be the
+# single saturated risk-aware model allowed above, but the other risk-aware
+# models must remain nonsaturated so the pressure still discriminates them.
+require_strong_baseline_nonsaturated = false
+preferred_target_rnet = 0.20
+preferred_wind_penetration = 0.30
+m4_radius_multiplier_anchor = 1.0
+m4_support_margin = 0.25
+m4_support_margin_grid = [0.00, 0.05, 0.10, 0.25]
+m4_support_validation_coverage = 0.95
+selection_priority = "physical_adequacy_and_M0_nonsaturation_then_minimum_distance_to_rnet20_wind30_uq150; model ranking is diagnostic and never selects the pressure"
+bootstrap_seed = 20260824
+
+[calibration]
+validation_state_count = 60
+p_gate = 0.05
+rho_tau_c_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+rho_tau_s_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+weight_scales = [1.0, 10.0, 50.0, 100.0, 500.0, 1000.0]
+stability_z = 1.959963984540054
+minimum_stable_neighbors = 2
+omega_plateau_event_abs = 0.01
+omega_plateau_edns_rel = 0.02
+omega_plateau_time_rel = 0.10
+bootstrap_replicates = 2000
+bootstrap_seed = 20260824
+
+[nsmc]
+seed = 20260824
+target_valid_states = 500
+maximum_valid_states = 2000
+edns_cov_target = 0.05
+edns_cov_maximum_reportable = 0.10
+minimum_model_acceptance_rate = 0.99
+candidate_factor = 4
+failure_policy = "conservative_full_shed"
+common_no_shed_precheck = true

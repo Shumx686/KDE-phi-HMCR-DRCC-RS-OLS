@@ -1,0 +1,113 @@
+# Validation-only RTS79 resource-pressure screen.  This transfers the revised
+# replacement-wind experiment to the larger system so model calls are no
+# longer determined by only three rare states.  It cannot unlock formal tests.
+
+[case]
+system = "RTS79"
+pipeline_cache_dir = "data_cache"
+K = 20
+line_limit_scale = 1.00
+
+[model]
+p = 2
+gamma_c = 0.95
+gamma_m = 0.95
+phi = "pearson_chi2"
+quadrature_order = 45
+eps_y = 1.0e-9
+# Four-state validation tradeoff anchor selected before the expanded
+# resource-pressure confirmation.  It remains validation-only until the
+# 60-state confirmation and immutable parameter/resource locks are complete.
+rho_tau_c = 0.50
+rho_tau_s = 0.50
+bandwidth_multiplier = 1.0
+cost_bandwidth_floor_mw = 1.0e-6
+safety_bandwidth_floor = 1.0e-6
+omega = [0.30, 0.30, 0.30, 0.30, 0.30, 0.30]
+lexicographic_secondary_shed = true
+lexicographic_abs_tol = 5.0e-5
+lexicographic_rel_tol = 0.0
+lexicographic_gap_multiplier = 10.0
+lexicographic_activation_tol = 1.0e-4
+eps_curtail = 1.0e-3
+eps_gen_tiebreak = 1.0e-6
+voll = 1000.0
+
+[solver]
+max_iter = 3000
+direct_solve_method = "qdldl"
+equilibrate_max_iter = 20
+iterative_refinement_max_iter = 20
+dynamic_regularization_delta = 1.0e-8
+min_terminate_step_length = 1.0e-12
+
+[final_solver]
+static_regularization_constant = 1.0e-4
+
+[acceptance]
+accepted_statuses = ["OPTIMAL", "ALMOST_OPTIMAL"]
+residual = 1.0e-5
+gap_abs = 5.0e-5
+gap_rel = 1.0e-5
+reference_nonpositive_tolerance = 0.0
+
+[resource_pressure_screen]
+amendment_id = "RTS79_FORECAST_ADEQUATE_RESOURCE_PRESSURE_V2_20260826"
+validation_amendment_reason = "The prior 1000-state RTS79 run called every model in only three states. This validation-only screen adds replacement wind, amplified wind forecast error, and frozen net-load adequacy pressure to obtain informative but nonsaturated curtailment states."
+validation_only = true
+test_access = "forbidden_until_resource_and_parameter_locks"
+wind_penetrations = [0.30, 0.40, 0.50]
+lambda_eps_grid = [1.00, 1.50, 2.00]
+replacement_ratios = [1.00]
+target_rnet_grid = [0.20, 0.15, 0.10, 0.05]
+rnet_reference_statistic = "validation_median"
+pilot_state_count = 4
+confirmation_state_count = 60
+shortlist_count = 12
+models = ["M0", "M2", "M4", "Proposed-RS"]
+minimum_forecast_adequacy_rate = 0.60
+pilot_minimum_acceptance_rate = 0.90
+confirmation_minimum_acceptance_rate = 0.95
+m0_lolp_min = 0.20
+m0_lolp_max = 0.80
+m0_lolp_preferred_min = 0.30
+m0_lolp_preferred_max = 0.70
+m0_lolp_target = 0.50
+strong_baseline_conditional_shed_multiplier_max = 12.0
+risk_model_saturation_lolp = 0.95
+maximum_saturated_risk_models = 1
+preferred_target_rnet = 0.15
+preferred_wind_penetration = 0.40
+m4_radius_multiplier_anchor = 1.0
+m4_support_margin = 0.25
+m4_support_margin_grid = [0.00, 0.05, 0.10, 0.25]
+m4_support_validation_coverage = 0.95
+selection_priority = "physical_adequacy_and_M0_nonsaturation_only; model ranking is diagnostic and never selects the pressure"
+bootstrap_seed = 20260824
+
+[calibration]
+validation_state_count = 60
+p_gate = 0.05
+rho_tau_c_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+rho_tau_s_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+# Include the lower safety weights exposed as necessary by the RBTS
+# validation diagnostic; formal selection remains validation-only.
+weight_scales = [0.03, 0.10, 0.30, 1.0, 10.0, 100.0]
+stability_z = 1.959963984540054
+minimum_stable_neighbors = 2
+omega_plateau_event_abs = 0.01
+omega_plateau_edns_rel = 0.02
+omega_plateau_time_rel = 0.10
+bootstrap_replicates = 2000
+bootstrap_seed = 20260824
+
+[nsmc]
+seed = 20260824
+target_valid_states = 500
+maximum_valid_states = 2000
+edns_cov_target = 0.05
+edns_cov_maximum_reportable = 0.10
+minimum_model_acceptance_rate = 0.99
+candidate_factor = 4
+failure_policy = "conservative_full_shed"
+common_no_shed_precheck = true
